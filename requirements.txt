@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+pydantic
+python-dotenv
+httpx
+requests
+deepagents
+langchain
+langchain-core
+langgraph
+langgraph-checkpoint-sqlite
