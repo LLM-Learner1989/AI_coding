@@ -11,6 +11,7 @@ from typing import Any
 
 from langchain_core.tools import tool
 
+from agent.backends.permissions import WorkspacePermissionError, ensure_safe_git_branch
 from agent.core.events import record_event
 from agent.core.graph import get_store
 from agent.core.settings import GITHUB_DEFAULT_BRANCH
@@ -31,7 +32,7 @@ logger = logging.getLogger("agent.run.github")
 def open_github_pull_request(
     owner: str,
     repo: str,
-    head: str,
+    head: str | None = None,
     base: str | None = None,
     title: str = "AI_Coding generated changes",
     body: str = "由 AI_Coding 自动生成。",
@@ -41,7 +42,7 @@ def open_github_pull_request(
     Args:
         owner: GitHub 仓库 owner。
         repo: GitHub 仓库名称。
-        head: 已推送的源分支。
+        head: 已推送的源分支；缺省时自动使用 runtime 预建的 feature 分支。
         base: 目标分支，默认取 GITHUB_DEFAULT_BRANCH。
         title: PR 标题。
         body: PR 描述。
@@ -59,6 +60,21 @@ def open_github_pull_request(
 
     base = base or GITHUB_DEFAULT_BRANCH
     thread_id = get_runtime_thread_id()
+    # head 缺省时，从 runtime 预建的 feature 分支读取；分支名同时校验合法性。
+    if not head and thread_id:
+        head = (get_store().get_thread(thread_id) or {}).get("branch_name")
+    try:
+        head = ensure_safe_git_branch(str(head)) if head else ""
+    except WorkspacePermissionError as exc:
+        return {"ok": False, "error": f"源分支名不合法: {exc}"}
+    if not head:
+        return {"ok": False, "error": "无法确定源分支：请提供 head，或确认 runtime 已创建 feature 分支。"}
+    try:
+        base = ensure_safe_git_branch(str(base))
+    except WorkspacePermissionError as exc:
+        return {"ok": False, "error": f"目标分支名不合法: {exc}"}
+    if head == base:
+        return {"ok": False, "error": f"源分支与目标分支不能相同（{head}）。请先创建并推送 feature 分支。"}
     # 记录关键参数但不记录 token；认证由 github_api 和 LocalShellBackend 内部处理。
     logger.info(
         "准备创建 GitHub PR：owner=%s repo=%s head=%s base=%s title=%s",

@@ -47,7 +47,7 @@ GitHub 仓库工作方式：
    `git clone https://github.com/<owner>/<repo>.git`
 6. 仓库应克隆到 `/projects` 对应的本地工作区目录下。
 7. 如果仓库已经存在，使用 `git -C <repo> fetch --all`、`git -C <repo> status` 等命令检查状态。
-8. 完成代码修改后，使用 `execute` 完成 `git add`、`git commit`、`git push`。
+8. 完成代码修改后，使用 `execute` 完成 `git add`、`git commit`、`git push`；工作区已由 runtime 预先切到 feature 分支，直接提交并推送当前分支，禁止 checkout 到 master/main 或直接 push 到 master/main。
 9. 创建或复用 Pull Request 必须调用 `open_github_pull_request`，不要手写 GitHub API。
 10. 需要向 GitHub PR 发布评论时，调用 `publish_github_pr_comment`。
 
@@ -82,7 +82,7 @@ CODING_PROMPT = """当前任务类型：开发实现。
 允许目标：
 1. 可以读取仓库、修改或创建代码文件。
 2. 可以执行必要的检查或测试命令。
-3. 可以使用 `execute` 完成 Git 分支、提交和推送。
+3. 可以使用 `execute` 完成 Git 提交和推送；feature 分支已由 runtime 预先创建，无需自行创建或切换分支。
 4. 可以使用 `open_github_pull_request` 创建或复用 GitHub Pull Request。
 
 开发流程：
@@ -95,8 +95,8 @@ CODING_PROMPT = """当前任务类型：开发实现。
 7. 修改或创建必要代码文件，保持改动聚焦。
 8. 尽量运行最小可验证命令或测试；测试失败后只围绕错误相关文件继续定位。
 9. 代码修改和测试完成后，尽快进入 Git 收尾，至少保留若干工具调用给 `git status`、`git add`、`git commit`、`git push` 和 `open_github_pull_request`。
-10. 使用 `execute` 完成 `git add`、`git commit`、`git push`。
-11. 调用 `open_github_pull_request` 创建或复用 Pull Request。
+10. 使用 `execute` 完成 `git add`、`git commit`、`git push`；当前工作区已在 feature 分支上，直接推送当前分支，禁止 checkout 到 master/main 或直接 push 到 master/main。
+11. 调用 `open_github_pull_request` 创建或复用 Pull Request；`head` 可省略（自动使用当前 feature 分支），`base` 为默认分支。
 12. 最后用中文总结：修改了什么、验证结果、分支和 PR 地址。
 
 Review 修复闭环：

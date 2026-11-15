@@ -37,7 +37,7 @@ from deepagents.backends.protocol import (  # DeepAgents 协议：文件操作�
 )
 from deepagents.backends.sandbox import BaseSandbox  # 沙箱基类
 
-from agent.core.settings import WORKSPACE_ROOT  # 统一的工作区根目录（由 settings.py 管理）
+from agent.core.settings import GITHUB_DEFAULT_BRANCH, WORKSPACE_ROOT  # 工作区根目录与默认分支（由 settings.py 管理）
 from agent.env_utils import get_env
 
 from .permissions import normalize_safe_command
@@ -74,6 +74,13 @@ _DANGEROUS_PATTERNS = (
     r"\bmkfs\b",
     r"\bnewfs\b",
     r"\bdd\s+.*\bof=/dev/",
+)
+# 禁止直接把改动推送到主干分支（master/main 及配置的默认分支），必须走 feature 分支。
+# 负向前瞻 (?<![\w/.-]) 避免误伤 feature/main-xxx 这类含主干词的分支名。
+_TRUNK_BRANCHES = sorted({re.escape(b) for b in {"master", "main", GITHUB_DEFAULT_BRANCH}})
+_PUSH_TO_TRUNK_RE = re.compile(
+    rf"git\s+push\b[^\n]*(?<![\w/.-])({'|'.join(_TRUNK_BRANCHES)})\b",
+    re.IGNORECASE,
 )
 
 
@@ -740,6 +747,8 @@ class LocalShellBackend(BaseSandbox):
         for pattern in _DANGEROUS_PATTERNS:
             if re.search(pattern, lowered):
                 return f"dangerous command pattern matched: {pattern}"
+        if _PUSH_TO_TRUNK_RE.search(lowered):
+            return "direct push to master/main is denied; push the feature branch instead"
         return None
 
     # ── 命令预处理 ───────────────────────────────────────────

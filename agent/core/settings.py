@@ -73,4 +73,4 @@ PROJECTS_DIR = WORKSPACE_ROOT / "projects"
 SKILLS_DIR = WORKSPACE_ROOT / "skills"
 
 # GitHub 默认分支（main 或 master，按仓库实际默认分支填写）。
-GITHUB_DEFAULT_BRANCH = get_env("GITHUB_DEFAULT_BRANCH", "main")
+GITHUB_DEFAULT_BRANCH = get_env("GITHUB_DEFAULT_BRANCH", "master")

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import json
+import re
 from pathlib import Path
 import uuid
 from collections.abc import Callable
@@ -93,6 +94,79 @@ def _ensure_repo_memory_for_repo(repo: Any, project_dir: str) -> None:
     )
     if created:
         logger.info("已初始化仓库记忆：repo=%s/%s", repo.owner, repo.repo)
+
+
+_BRANCH_SLUG_RE = re.compile(r"[^a-z0-9]+")
+_BRANCH_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
+# 分支标题提取时跳过的英文停用词/请求词，避免生成 feature/add-xxx 这类无信息量分支名。
+_BRANCH_STOP_WORDS = {
+    "a", "an", "the", "and", "or", "for", "to", "in", "on", "with", "of", "at",
+    "by", "from", "into", "this", "that", "my", "our", "your", "please", "help",
+    "me", "can", "could", "you", "i", "we", "it", "add", "make", "create",
+    "implement", "new", "need", "want",
+}
+
+
+def _slugify(text: str) -> str:
+    """把文本转成英文 slug：小写、非 [a-z0-9] 折叠为连字符。"""
+
+    return _BRANCH_SLUG_RE.sub("-", text.lower()).strip("-")
+
+
+def _feature_branch_slug(*, prompt: str, repo_name: str) -> str:
+    """从需求里提取一个英文关键词作为分支标题，否则回退仓库名。"""
+
+    for word in _BRANCH_WORD_RE.findall(prompt or ""):
+        if word.lower() in _BRANCH_STOP_WORDS:
+            continue
+        slug = _slugify(word)
+        if slug:
+            return slug[:24].strip("-")
+    return (_slugify(repo_name) or "task")[:24].strip("-")
+
+
+def build_feature_branch_name(*, prompt: str, repo_name: str, thread_id: str) -> str:
+    """生成可读英文 feature 分支名：feature/<短标题>-<thread 短 id>。
+
+    分支名只包含 [a-z0-9-] 和分隔斜杠，天然通过 ensure_safe_git_branch 校验。
+    """
+
+    short_id = thread_id.replace("-", "")[:8].lower()
+    slug = _feature_branch_slug(prompt=prompt, repo_name=repo_name)
+    return f"feature/{slug}-{short_id}"
+
+
+def _prepare_feature_branch(*, repo: Any, branch_name: str) -> None:
+    """确保仓库本地存在，并基于默认分支创建或复位 feature 分支。
+
+    使用 `git checkout -B` 而非 `-b`：同一 thread 重试时分支名不变，`-B` 会把
+    已存在的本地分支复位到默认分支，避免 `-b` 因分支已存在而失败。
+    """
+
+    workspace = Workspace(WORKSPACE_ROOT)
+    backend = LocalShellBackend(workspace)
+    project_dir = repo_project_dir(repo)
+    relative_dir = Path(project_dir)
+    target = workspace.resolve(relative_dir)
+    clone_url = repo.clone_url
+    PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    outputs: list[Any] = []
+    if target.exists() and (target / ".git").exists():
+        outputs.append(backend.run(f"git remote set-url origin {clone_url}", cwd=str(relative_dir), timeout=60))
+        outputs.append(backend.run(f"git checkout {GITHUB_DEFAULT_BRANCH}", cwd=str(relative_dir), timeout=300))
+        outputs.append(backend.run("git fetch --all", cwd=str(relative_dir), timeout=300))
+        outputs.append(backend.run(f"git pull origin {GITHUB_DEFAULT_BRANCH} --ff-only", cwd=str(relative_dir), timeout=300))
+    else:
+        outputs.append(backend.run(f"git clone {clone_url} {target.name}", cwd="projects", timeout=600))
+
+    failed = next((r for r in outputs if getattr(r, "exit_code", 0) != 0), None)
+    if failed is not None:
+        raise RuntimeError(f"准备仓库失败: {mask_token(failed.stderr or failed.stdout)}")
+
+    checkout = backend.run(f"git checkout -B {branch_name}", cwd=str(relative_dir), timeout=120)
+    if checkout.exit_code != 0:
+        raise RuntimeError(f"创建 feature 分支失败: {mask_token(checkout.stderr or checkout.stdout)}")
 
 
 def _message_content_to_text(content: Any) -> str:
@@ -868,6 +942,9 @@ def run_agent_task(
     repo = parse_github_repo_url(repo_url)
     logger.info("GitHub 仓库解析成功：owner=%s repo=%s", repo.owner, repo.repo)
     record_event(thread_id, "repo", "解析 GitHub 仓库", status="completed")
+    feature_branch: str | None = None
+    if task_kind == "coding":
+        feature_branch = build_feature_branch_name(prompt=coding_prompt, repo_name=repo.repo, thread_id=thread_id)
     store.upsert_thread(
         thread_id=thread_id,
         title=coding_prompt[:80] or f"GitHub: {repo.owner}/{repo.repo}",
@@ -878,6 +955,7 @@ def run_agent_task(
         repo_url=repo.clone_url,
         repo_owner=repo.owner,
         repo_name=repo.repo,
+        branch_name=feature_branch,
         latest_run_status="running",
     )
     # 每轮 Agent 执行都有独立 run_id。前端事件列表按 run_id 追加，不能复用上一轮 id。
@@ -891,6 +969,10 @@ def run_agent_task(
     logger.info("Agent 图已构建：thread_id=%s", thread_id)
     record_event(thread_id, "agent", "构建 Agent 运行图", status="completed")
     try:
+        if task_kind == "coding" and feature_branch:
+            record_event(thread_id, "git:branch", f"准备 feature 分支 {feature_branch}", kind="execute", status="in_progress")
+            _prepare_feature_branch(repo=repo, branch_name=feature_branch)
+            record_event(thread_id, "git:branch", f"已基于 {GITHUB_DEFAULT_BRANCH} 创建 feature 分支 {feature_branch}", kind="execute", status="completed")
         logger.info("开始通过官方事件流调用 Agent：thread_id=%s", thread_id)
         # runtime 只负责“决定跑什么”和“最终状态落库”。
         # 运行过程中的 text delta、write_todos、tool call、subagent 事件解析，
