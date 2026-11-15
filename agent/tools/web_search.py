@@ -3,57 +3,136 @@
 该工具用于在本地仓库上下文不足时，补充公开网络资料，例如框架文档、第三方库变更说明、
 错误信息背景和公开技术资料。工具本身只返回搜索摘要，不替代本地代码分析。
 
-外部搜索依赖智谱 Web Search API。SDK 采用懒加载方式初始化，避免后端启动阶段因为可选依赖
-或 API Key 缺失而直接失败。
+外部搜索依赖 DeepSeek Search API（POST {DEEPSEEK_BASE_URL}/v1/tools/search）。
+工具内直接使用 httpx 发起 HTTP 调用，返回结构化 results（title/url/snippet/summary/
+content/date），再格式化为带引用的文本摘要交给模型。
+
+对外契约保持不变：`web_search(query: str) -> str`，返回带引用的搜索结果文本；
+失败时返回明确错误信息。底层供应商从智谱平替为 DeepSeek，调用方无感知。
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from functools import lru_cache
 from typing import Any
 
+import httpx
 from langchain_core.tools import tool
 
 from agent.core.events import record_event
-from agent.env_utils import require_env
+from agent.env_utils import get_env, require_env
 from agent.tools.github_api import mask_token
 from agent.tools.runtime_context import get_runtime_thread_id
 
 logger = logging.getLogger("agent.run.web_search")
 
+# 搜索结果默认条数，控制外部结果数量和模型上下文体积。
+_SEARCH_COUNT = 3
 
-@lru_cache(maxsize=1)
-def _get_zhipu_client() -> Any:
-    """懒加载智谱 SDK 客户端。
 
-    Web 搜索不是后端启动的必要能力，所以不能在模块导入时直接初始化 SDK。
-    这样即使本地暂时没有安装 `zai`，FastAPI 也能正常启动；只有 Agent 真正调用
-    web_search 时，才返回明确的依赖或密钥错误。
+def _deepseek_search_base() -> str:
+    """解析 DeepSeek 服务地址，去掉尾部斜杠，复用模型接入同一套 DEEPSEEK_BASE_URL。"""
+
+    return get_env("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/")
+
+
+def _deepseek_headers() -> dict[str, str]:
+    """构造 DeepSeek Search API 请求头。
+
+    DeepSeek 使用 `Authorization: Bearer <api_key>` 认证，与模型接入共用同一个
+    DEEPSEEK_API_KEY。Key 从环境变量读取，绝不硬编码。
     """
 
-    # API Key 在真正搜索时才读取，避免导入模块阶段对环境变量产生强依赖。
-    api_key = require_env("ZHIPU_API_KEY")
-    try:
-        # 优先兼容新版 `zai` SDK。
-        from zai import ZhipuAiClient
+    return {
+        "Authorization": f"Bearer {require_env('DEEPSEEK_API_KEY')}",
+        "Content-Type": "application/json",
+    }
 
-        return ZhipuAiClient(api_key=api_key)
-    except (ImportError, AttributeError):
-        pass
 
+def _deepseek_search(query: str, *, count: int = _SEARCH_COUNT) -> list[dict[str, Any]]:
+    """调用 DeepSeek Search API，返回结构化 results 列表。
+
+    智谱 → DeepSeek 参数映射：
+    - search_query               → query（字段名不同，语义相同）
+    - count                      → count
+    - search_engine="search_pro" → 忽略：DeepSeek 只有自家搜索，无引擎选择参数
+    - search_recency_filter      → 忽略：DeepSeek 未提供时间/新鲜度过滤参数
+    - （新增）need_content=False → content 字段置空，不拉取可能存在的完整正文；
+      snippet（短摘要）已足够补充背景，控制上下文体积
+
+    Args:
+        query: 搜索关键词或问题。
+        count: 期望返回的结果条数上限。
+
+    Returns:
+        结构化结果列表，每个元素包含 title/url/snippet/summary/content/date/rerank_score。
+
+    Raises:
+        RuntimeError: 请求失败、返回非 2xx、或响应结构不符合契约。
+    """
+
+    url = f"{_deepseek_search_base()}/v1/tools/search"
+    payload = {"query": query, "count": count, "need_content": False}
     try:
-        # 回退兼容旧版 `zhipuai` SDK，降低部署环境升级成本。
-        from zhipuai import ZhipuAI
-    except ImportError as exc:
-        raise RuntimeError("缺少智谱 SDK，请先安装依赖：pip install zhipuai") from exc
-    return ZhipuAI(api_key=api_key)
+        with httpx.Client(timeout=30) as client:
+            response = client.post(url, headers=_deepseek_headers(), json=payload)
+    except httpx.HTTPError as exc:
+        raise RuntimeError(f"DeepSeek 搜索请求失败: {mask_token(str(exc))}") from exc
+    if response.status_code >= 400:
+        raise RuntimeError(f"DeepSeek 搜索失败: {response.status_code} {mask_token(response.text)}")
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise RuntimeError("DeepSeek 搜索返回非 JSON 响应") from exc
+    results = data.get("results") if isinstance(data, dict) else None
+    if not isinstance(results, list):
+        raise RuntimeError(f"DeepSeek 搜索返回结构异常: {mask_token(str(data)[:200])}")
+    return results
+
+
+def _format_search_results(results: list[dict[str, Any]]) -> str:
+    """把结构化结果格式化为带引用的文本摘要。
+
+    每条结果按「标题 + 摘要 + 来源 URL」输出，方便模型给出处、
+    也能二次 fetch_url 深读。正文优先级 snippet > summary > content：
+    snippet 是短摘要、summary 是较完整正文，优先 snippet 控制上下文体积；
+    二者都缺失时才回退 content。
+    """
+
+    if not results:
+        return "没有搜索到任何内容。"
+
+    blocks: list[str] = []
+    for index, item in enumerate(results, start=1):
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        body = (
+            str(item.get("snippet") or "").strip()
+            or str(item.get("summary") or "").strip()
+            or str(item.get("content") or "").strip()
+        )
+        url = str(item.get("url") or "").strip()
+        date = str(item.get("date") or "").strip()[:10]
+        if not body:
+            continue
+        parts = [f"{index}. {title}" if title else f"{index}. 搜索结果"]
+        parts.append(body)
+        source = url
+        if date:
+            source = f"{url}（{date}）" if url else f"日期: {date}"
+        if source:
+            parts.append(f"来源: {source}")
+        blocks.append("\n".join(parts))
+    if not blocks:
+        return "搜索结果为空。"
+    return "\n\n".join(blocks)
 
 
 @tool("web_search", parse_docstring=True)
 def web_search(query: str) -> str:
-    """使用智谱搜狗 Web Search API 进行联网搜索。
+    """使用 DeepSeek Search API 进行联网搜索。
 
     适用于需要外部资料支撑的任务，例如查询最新框架文档、第三方库用法、
     API 变更说明、行业资料或错误信息背景。不要搜索密钥、token、私有仓库内容。
@@ -62,7 +141,7 @@ def web_search(query: str) -> str:
         query: 需要搜索的关键词或问题。
 
     Returns:
-        搜索结果摘要文本；失败时返回明确错误信息。
+        带引用的搜索结果摘要文本；失败时返回明确错误信息。
     """
 
     thread_id = get_runtime_thread_id()
@@ -82,26 +161,8 @@ def web_search(query: str) -> str:
             detail=json.dumps({"query": normalized_query}, ensure_ascii=False),
         )
     try:
-        client = _get_zhipu_client()
-        # 这里固定使用 search_pro 并限制 count=3，控制外部结果数量和模型上下文体积。
-        response = client.web_search.web_search(
-            search_engine="search_pro",
-            search_query=normalized_query,
-            count=3,
-            search_recency_filter="noLimit",
-        )
-        results = getattr(response, "search_result", None) or []
-        if not results:
-            output = "没有搜索到任何内容。"
-        else:
-            # 只抽取 content 字段，避免把 SDK 的复杂对象直接暴露给模型。
-            output = "\n\n".join(
-                str(getattr(item, "content", "") or "").strip()
-                for item in results
-                if str(getattr(item, "content", "") or "").strip()
-            )
-            if not output:
-                output = "搜索结果为空。"
+        results = _deepseek_search(normalized_query)
+        output = _format_search_results(results)
         if thread_id:
             # 事件详情只记录预览片段，避免把大量搜索结果重复写入事件表。
             record_event(

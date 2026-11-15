@@ -76,16 +76,17 @@ def get_github_token() -> str:
 
 
 def mask_token(text: str) -> str:
-    """对文本中的 GitHub Token 做脱敏。
+    """对文本中的敏感凭据做脱敏。
 
-    API 错误、Git 输出和异常信息可能包含访问令牌。
+    API 错误、Git 输出和异常信息可能包含访问令牌或模型 API Key。
     所有写日志或返回给模型的外部错误文本都应经过该函数处理。
     """
 
     masked = text
-    token = get_env("GITHUB_TOKEN").strip()
-    if token:
-        masked = masked.replace(token, "***")
+    for name in ("GITHUB_TOKEN", "DEEPSEEK_API_KEY", "ZHIPU_API_KEY"):
+        token = get_env(name).strip()
+        if token:
+            masked = masked.replace(token, "***")
     return masked
 
 
