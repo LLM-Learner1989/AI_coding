@@ -138,7 +138,7 @@ def web_search(query: str) -> str:
     API 变更说明、行业资料或错误信息背景。不要搜索密钥、token、私有仓库内容。
 
     Args:
-        query: 需要搜索的关键词或问题。
+        query: 需要搜索的关键词或问题；超过 128 个字符会被截断。
 
     Returns:
         带引用的搜索结果摘要文本；失败时返回明确错误信息。
@@ -149,6 +149,9 @@ def web_search(query: str) -> str:
     normalized_query = " ".join((query or "").split())
     if not normalized_query:
         return "搜索失败：query 不能为空"
+    # DeepSeek Search API 要求 query 为 1~128 个 Unicode 字符，超出会被官方拒绝（400）。
+    # 这里截断到 128，避免模型偶发超长 query 导致搜索整体失败。
+    normalized_query = normalized_query[:128]
 
     if thread_id:
         # 写入工具调用事件，前端可以展示“正在联网搜索”的运行过程。

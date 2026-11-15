@@ -65,6 +65,19 @@ def test_web_search_empty_query():
     assert ws.web_search.func("   ") == "搜索失败：query 不能为空"
 
 
+def test_web_search_truncates_long_query(monkeypatch):
+    captured = {}
+
+    def fake_search(query, count=3):
+        captured["query"] = query
+        return [{"title": "T", "url": "https://x", "summary": "S", "content": None}]
+
+    monkeypatch.setattr(ws, "get_runtime_thread_id", lambda: None)
+    monkeypatch.setattr(ws, "_deepseek_search", fake_search)
+    ws.web_search.func("x" * 200)
+    assert len(captured["query"]) == 128
+
+
 def test_web_search_success_returns_str(monkeypatch):
     monkeypatch.setattr(ws, "get_runtime_thread_id", lambda: None)
     monkeypatch.setattr(
