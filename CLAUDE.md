@@ -87,7 +87,7 @@ cd ui && npm install && cd ..
 - `INTENT_MODEL`（默认同 `MAIN_MODEL`）、`INTENT_MODEL_TEMPERATURE`（默认 `0`）、`INTENT_MODEL_MAX_TOKENS`（默认 `200`）— 意图分类模型变体
 - `GITHUB_TOKEN` — GitHub PAT，经 Git askpass（`x-access-token` + token）注入，绝不写进命令/日志
 - `GITHUB_API_BASE_URL`（默认 `https://api.github.com`）
-- `GITHUB_DEFAULT_BRANCH`（默认 `main`；若仓库默认分支是 `master` 请改这里）
+- `GITHUB_DEFAULT_BRANCH`（默认 `master`；若仓库默认分支是 `main` 请改这里）
 - `DEFAULT_REPO_URL`（默认 `https://github.com/LLM-Learner1989/AI_coding`）
 - `AI_WORKSPACE_ROOT` / `LOCAL_SHELL_WORKSPACE` — 工作区根目录（默认 `~/ai_workspace`；`LocalShellBackend` 取值优先级：构造参数 > `LOCAL_SHELL_WORKSPACE` > `AI_WORKSPACE_ROOT`）
 - `LOCAL_SHELL_PROJECTS_DIR`（默认 `projects`）、`LOCAL_SHELL_SHARED_PYTHON_VENV`（默认 `runtimes/python/default/.venv`）、`LOCAL_SHELL_ENABLE_COMMAND_GUARD`（默认 `true`）、`LOCAL_SHELL_CREATE_PYTHON_VENV`（默认 `false`）
@@ -116,6 +116,6 @@ cd ui && npm install && cd ..
 - **任务类型决定权限**：只有 `coding` 允许写文件/提交/push/建 PR；其余均为只读。权限在 runtime、系统提示词、`LocalShellBackend` 三层同时约束。
 - **虚拟路径 vs 命令路径**：文件工具用 `/projects/<repo>/...`；`execute` 默认在 `projects` 目录下执行，命令里直接用 `<repo>`。
 - **仅支持 GitHub**：`https://github.com/<owner>/<repo>`，不支持其他代码托管平台。
-- **默认分支**：以 `GITHUB_DEFAULT_BRANCH` 为准（默认 `main`）；pull 和 PR base 都会读它。
+- **默认分支**：以 `GITHUB_DEFAULT_BRANCH` 为准（默认 `master`）；pull 和 PR base 都会读它。
 - **输出语言**：面向用户用中文；代码/路径/命令/API 名可保留英文。
 - **Token 安全**：所有进日志/模型上下文的文本经 `mask_token` 脱敏；token 绝不写进命令、文件、commit、PR。
