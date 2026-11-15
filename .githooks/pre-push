@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# 强制：非默认分支必须按 feature/<change-reason>-<commitId> 命名。
+# 由 core.hooksPath 指向本目录启用（见 scripts/setup_hooks.sh）。
+set -euo pipefail
+
+# 放行的默认分支；其余分支必须走 feature/... 规范。
+ALLOWED_BRANCHES="master main"
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  branch="${remote_ref#refs/heads/}"
+
+  # 删除远端分支的 push（local_sha 全 0）放行。
+  if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+    continue
+  fi
+
+  # 默认分支放行。
+  case " $ALLOWED_BRANCHES " in
+    *" $branch "*) continue ;;
+  esac
+
+  # 命名规范：feature/<kebab-reason>-<7~40 位十六进制 commitId>。
+  if ! printf '%s' "$branch" | grep -Eq '^feature/[a-z0-9]+(-[a-z0-9]+)*-[0-9a-f]{7,40}$'; then
+    echo "❌ 拒绝 push：分支名不合规 -> ${branch}" >&2
+    echo "   规范：feature/<change-reason>-<commitId>" >&2
+    echo "   示例：feature/web-search-query-limit-d8a46e4" >&2
+    exit 1
+  fi
+done
+
+exit 0
