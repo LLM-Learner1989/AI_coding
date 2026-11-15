@@ -155,8 +155,10 @@ def _prepare_feature_branch(*, repo: Any, branch_name: str) -> None:
     if target.exists() and (target / ".git").exists():
         outputs.append(backend.run(f"git remote set-url origin {clone_url}", cwd=str(relative_dir), timeout=60))
         outputs.append(backend.run(f"git checkout {GITHUB_DEFAULT_BRANCH}", cwd=str(relative_dir), timeout=300))
-        outputs.append(backend.run("git fetch --all", cwd=str(relative_dir), timeout=300))
-        outputs.append(backend.run(f"git pull origin {GITHUB_DEFAULT_BRANCH} --ff-only", cwd=str(relative_dir), timeout=300))
+        outputs.append(backend.run(f"git fetch origin {GITHUB_DEFAULT_BRANCH}", cwd=str(relative_dir), timeout=300))
+        # 强制本地默认分支对齐远程：既能快进，也能在远程被 force-push 导致分叉时直接复位，
+        # 避免 `pull --ff-only` 因历史分叉而失败。
+        outputs.append(backend.run(f"git reset --hard origin/{GITHUB_DEFAULT_BRANCH}", cwd=str(relative_dir), timeout=120))
     else:
         outputs.append(backend.run(f"git clone {clone_url} {target.name}", cwd="projects", timeout=600))
 
@@ -484,8 +486,10 @@ def _is_confirmable_plan_text(text: str) -> bool:
     plan_markers = [
         "是否确认实施该方案",
         "技术方案",
+        "方案说明",
         "修复技术方案",
         "实施步骤",
+        "改动目标",
         "修复依据",
         "验证方案",
     ]
