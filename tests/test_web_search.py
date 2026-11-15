@@ -1,7 +1,7 @@
 """web_search 工具的单元测试。
 
 覆盖：
-1. `_format_search_results` 的引用格式（title/url/date）与正文回退（summary > snippet > content）。
+1. `_format_search_results` 的引用格式（title/url/date）与正文回退（snippet > summary > content）。
 2. `web_search` 的入参/返回契约：返回 str、空 query、失败降级文本。
 3. `_deepseek_search` 的请求体（query/count/need_content）、Bearer 头与响应解析。
 """
@@ -17,7 +17,7 @@ import importlib
 ws = importlib.import_module("agent.tools.web_search")
 
 
-def test_format_citation_and_summary():
+def test_format_citation_prefers_snippet():
     results = [
         {
             "title": "DeepSeek V4 发布",
@@ -32,19 +32,20 @@ def test_format_citation_and_summary():
     assert isinstance(out, str)
     assert "DeepSeek V4 发布" in out
     assert "https://example.com/v4" in out
-    assert "V4 是最新一代模型。" in out  # 优先 summary
+    assert "V4 已上线。" in out  # 优先 snippet
+    assert "V4 是最新一代模型。" not in out  # 有 snippet 时不用 summary
     assert "来源:" in out
 
 
-def test_format_falls_back_summary_then_snippet_then_content():
-    # summary 缺失 → 用 snippet
+def test_format_falls_back_snippet_then_summary_then_content():
+    # snippet 缺失 → 用 summary
     a = ws._format_search_results(
-        [{"title": "T", "url": "u", "summary": "", "snippet": "SNIP", "content": "FULL"}]
+        [{"title": "T", "url": "u", "snippet": "", "summary": "SUM", "content": "FULL"}]
     )
-    assert "SNIP" in a and "FULL" not in a
-    # summary/snippet 都缺失 → 用 content
+    assert "SUM" in a and "FULL" not in a
+    # snippet/summary 都缺失 → 用 content
     b = ws._format_search_results(
-        [{"title": "T", "url": "u", "summary": "", "snippet": "", "content": "FULL"}]
+        [{"title": "T", "url": "u", "snippet": "", "summary": "", "content": "FULL"}]
     )
     assert "FULL" in b
 

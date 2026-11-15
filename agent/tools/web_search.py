@@ -58,8 +58,8 @@ def _deepseek_search(query: str, *, count: int = _SEARCH_COUNT) -> list[dict[str
     - count                      → count
     - search_engine="search_pro" → 忽略：DeepSeek 只有自家搜索，无引擎选择参数
     - search_recency_filter      → 忽略：DeepSeek 未提供时间/新鲜度过滤参数
-    - （新增）need_content=False → 不拉取完整 markdown 正文，summary/snippet 已足够
-      补充背景，控制上下文体积
+    - （新增）need_content=False → content 字段置空，不拉取可能存在的完整正文；
+      snippet（短摘要）已足够补充背景，控制上下文体积
 
     Args:
         query: 搜索关键词或问题。
@@ -94,9 +94,10 @@ def _deepseek_search(query: str, *, count: int = _SEARCH_COUNT) -> list[dict[str
 def _format_search_results(results: list[dict[str, Any]]) -> str:
     """把结构化结果格式化为带引用的文本摘要。
 
-    每条结果按「标题 + 摘要/片段/正文 + 来源 URL」输出，方便模型给出处、
-    也能二次 fetch_url 深读。正文优先级 summary > snippet > content，
-    控制上下文体积；summary/snippet 都缺失时才回退完整 content。
+    每条结果按「标题 + 摘要 + 来源 URL」输出，方便模型给出处、
+    也能二次 fetch_url 深读。正文优先级 snippet > summary > content：
+    snippet 是短摘要、summary 是较完整正文，优先 snippet 控制上下文体积；
+    二者都缺失时才回退 content。
     """
 
     if not results:
@@ -108,12 +109,12 @@ def _format_search_results(results: list[dict[str, Any]]) -> str:
             continue
         title = str(item.get("title") or "").strip()
         body = (
-            str(item.get("summary") or "").strip()
-            or str(item.get("snippet") or "").strip()
+            str(item.get("snippet") or "").strip()
+            or str(item.get("summary") or "").strip()
             or str(item.get("content") or "").strip()
         )
         url = str(item.get("url") or "").strip()
-        date = str(item.get("date") or "").strip()
+        date = str(item.get("date") or "").strip()[:10]
         if not body:
             continue
         parts = [f"{index}. {title}" if title else f"{index}. 搜索结果"]
