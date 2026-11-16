@@ -117,5 +117,6 @@ cd ui && npm install && cd ..
 - **虚拟路径 vs 命令路径**：文件工具用 `/projects/<repo>/...`；`execute` 默认在 `projects` 目录下执行，命令里直接用 `<repo>`。
 - **仅支持 GitHub**：`https://github.com/<owner>/<repo>`，不支持其他代码托管平台。
 - **默认分支**：以 `GITHUB_DEFAULT_BRANCH` 为准（默认 `master`）；pull 和 PR base 都会读它。
+- **PR 分支命名**：新建 PR 的分支必须以 `feature/<change-reason>-<commitId>` 命名（change-reason 用 kebab-case，commitId 用提交短 hash）。仓库已配置 `.githooks/pre-push` 硬性拦截，不符合该命名的分支无法 push；新 clone 需先执行 `./scripts/setup_hooks.sh` 启用 hook。
 - **输出语言**：面向用户用中文；代码/路径/命令/API 名可保留英文。
 - **Token 安全**：所有进日志/模型上下文的文本经 `mask_token` 脱敏；token 绝不写进命令、文件、commit、PR。
